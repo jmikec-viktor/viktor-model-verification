@@ -53,16 +53,16 @@ class Parametrization(vkt.Parametrization):
     # )
 
     # Dynamic array for selecting categories to check
-    required_categories = vkt.DynamicArray(
-        "Required Categories",
+    contract_scope = vkt.DynamicArray(
+        "Contract Scope",
         description="Add categories that should be present in the model with custom colors",
         default=[
-            {"category": "Structural Framing", "color": vkt.Color(255, 0, 0)},
-            {"category": "Structural Columns", "color": vkt.Color(0, 0, 255)},
-            {"category": "Walls", "color": vkt.Color(0, 255, 0)},
+            {"category": "Doors", "color": vkt.Color(255, 0, 0)},
+            {"category": "Lighting Fixtures", "color": vkt.Color(0, 0, 255)},
+            {"category": "Structural Framing", "color": vkt.Color(0, 255, 0)},
         ],
     )
-    required_categories.category = vkt.OptionField(
+    contract_scope.category = vkt.OptionField(
         "Category",
         options=[
             "Structural Framing",
@@ -87,7 +87,7 @@ class Parametrization(vkt.Parametrization):
             "Pipes",
         ],
     )
-    required_categories.color = vkt.ColorField(
+    contract_scope.color = vkt.ColorField(
         "Highlight Color", default=vkt.Color(0, 255, 0)
     )
 
@@ -314,7 +314,7 @@ class Controller(vkt.Controller):
         group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
 
         # Extract required categories from dynamic array
-        required_categories = set(row["category"] for row in params.required_categories)
+        contract_scope = set(row["category"] for row in params.contract_scope)
 
         # Define the master list of categories (same as dropdown options)
         all_categories = [
@@ -393,7 +393,7 @@ class Controller(vkt.Controller):
             in_model = element_count > 0
 
             # Check if category is in required categories
-            in_contract = category_name in required_categories
+            in_contract = category_name in contract_scope
 
             # Determine status symbol and description
             if in_contract and in_model:
@@ -466,7 +466,7 @@ class Controller(vkt.Controller):
         # Build a list of external IDs with their colors for each category
         external_ids_with_colors = []
 
-        for row in params.required_categories:
+        for row in params.contract_scope:
             category_name = row["category"]
             color = row["color"]
 
@@ -740,7 +740,7 @@ class Controller(vkt.Controller):
         group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
 
         # Extract required categories from dynamic array
-        required_categories = set(row["category"] for row in params.required_categories)
+        contract_scope = set(row["category"] for row in params.contract_scope)
 
         # Define the master list of categories (same as dropdown options)
         all_categories = [
@@ -819,9 +819,9 @@ class Controller(vkt.Controller):
         categories_in_model = sum(
             1 for cat in all_categories if model_category_counts.get(cat, 0) > 0
         )
-        categories_in_contract = len(required_categories)
+        categories_in_contract = len(contract_scope)
         categories_matched = sum(
-            1 for cat in required_categories if model_category_counts.get(cat, 0) > 0
+            1 for cat in contract_scope if model_category_counts.get(cat, 0) > 0
         )
 
         summary_group = vkt.DataGroup(
@@ -850,7 +850,7 @@ class Controller(vkt.Controller):
             in_model = element_count > 0
 
             # Check if category is in required categories
-            in_contract = category_name in required_categories
+            in_contract = category_name in contract_scope
 
             # Categorize and add to appropriate group
             if in_contract and in_model:
@@ -955,7 +955,7 @@ class Controller(vkt.Controller):
         group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
 
         # Extract required categories from dynamic array
-        required_categories = set(row["category"] for row in params.required_categories)
+        contract_scope = set(row["category"] for row in params.contract_scope)
 
         # Define the master list of categories (same as dropdown options)
         all_categories = [
@@ -1079,7 +1079,7 @@ class Controller(vkt.Controller):
             in_model = element_count > 0
 
             # Check if category is in required categories
-            in_contract = category_name in required_categories
+            in_contract = category_name in contract_scope
 
             # Determine status symbol, description, and color
             if in_contract and in_model:
