@@ -42,27 +42,62 @@ def execute_graphql(
 
 
 class Parametrization(vkt.Parametrization):
-    """Application input parameters."""
+    """Application input parameters organized in steps."""
 
-    file_field = vkt.FileField("Select file from ACC", flex=60)
-    # AutodeskFileField to select a file from Autodesk Construction Cloud
-    # autodesk_file = vkt.AutodeskFileField(
-    #     "Select Autodesk File",
-    #     oauth2_integration="autodesk-integration",
-    #     description="Select a file from Autodesk Construction Cloud to view and analyze",
-    # )
+    # Step 1: Autodesk Files
+    step_1 = vkt.Step(
+        "Autodesk Files",
+        views=["view_autodesk_model"],
+        description="Select the Autodesk files to analyze",
+        next_label="Next: Define Contract Scope",
+    )
 
-    # Dynamic array for selecting categories to check
-    contract_scope = vkt.DynamicArray(
+    step_1.autodesk_file = vkt.AutodeskFileField(
+        "Select Autodesk Structural File",
+        oauth2_integration="autodesk-integration",
+        description="Select a structural file from Autodesk Construction Cloud to view and analyze",
+        flex=60,
+    )
+
+    step_1.autodesk_file_electrical = vkt.AutodeskFileField(
+        "Select Autodesk Electrical File",
+        oauth2_integration="autodesk-integration",
+        description="Select an electrical file from Autodesk Construction Cloud to view and analyze",
+        flex=60,
+    )
+
+    # Step 2: Contract Scope
+    step_2 = vkt.Step(
+        "Contract Scope",
+        views=[
+            "view_category_summary",
+            "view_colored_categories",
+            "view_category_data",
+        ],
+        description="Define the categories that should be present in the model",
+        previous_label="Back: Autodesk Files",
+        next_label="Next: Download Report",
+    )
+
+    step_2.csv_file = vkt.FileField(
+        "Contract Scope",
+        file_types=[".csv"],
+        description="Upload a CSV file with categories in rows (no header)",
+        flex=60,
+    )
+
+    step_2.load_from_csv = vkt.SetParamsButton(
+        "Load Contract Scope",
+        method="load_categories_from_csv",
+        description="Populate the Contract Scope with categories from the uploaded CSV file",
+        flex=60,
+    )
+
+    step_2.required_categories = vkt.DynamicArray(
         "Contract Scope",
         description="Add categories that should be present in the model with custom colors",
-        default=[
-            {"category": "Doors", "color": vkt.Color(255, 0, 0)},
-            {"category": "Lighting Fixtures", "color": vkt.Color(0, 0, 255)},
-            {"category": "Structural Framing", "color": vkt.Color(0, 255, 0)},
-        ],
     )
-    contract_scope.category = vkt.OptionField(
+    step_2.required_categories.category = vkt.OptionField(
         "Category",
         options=[
             "Structural Framing",
@@ -87,15 +122,22 @@ class Parametrization(vkt.Parametrization):
             "Pipes",
         ],
     )
-    contract_scope.color = vkt.ColorField(
+    step_2.required_categories.color = vkt.ColorField(
         "Highlight Color", default=vkt.Color(0, 255, 0)
     )
 
-    # Download button for Category Summary report
-    download_report = vkt.DownloadButton(
-        "Download Category Report",
-        method="download_category_report",
-        description="Download a Word document with the Category Summary table",
+    # Step 3: Download Report
+    step_3 = vkt.Step(
+        "Download Report",
+        views=["view_category_summary"],
+        description="Download a comprehensive report with the category summary",
+        previous_label="Back: Contract Scope",
+    )
+
+    step_3.download_report = vkt.DownloadButton(
+        "Download Contract Compliance Report",
+        method="download_contract_compliance_report",
+        description="Download a Word document showing how the model complies with the contract scope",
         flex=60,
     )
 
@@ -104,6 +146,54 @@ class Controller(vkt.Controller):
     """Main application controller."""
 
     parametrization = Parametrization
+
+    def load_categories_from_csv(self, params, **kwargs):
+        """
+        Load categories from the uploaded CSV file and populate the Dynamic Array.
+
+        Args:
+            params: User input parameters
+            **kwargs: Additional arguments
+
+        Returns:
+            SetParamsResult with updated required_categories
+        """
+        import csv
+        import random
+
+        if not params.step_2.csv_file:
+            raise vkt.UserError("Please upload a CSV file first")
+
+        # Read the CSV file
+        csv_file = params.step_2.csv_file.file
+        categories = []
+
+        try:
+            with csv_file.open() as f:
+                csv_reader = csv.reader(f)
+                for row in csv_reader:
+                    # Skip empty rows
+                    if row and row[0].strip():
+                        category_name = row[0].strip()
+                        categories.append(category_name)
+        except Exception as e:
+            raise vkt.UserError(f"Failed to read CSV file: {str(e)}")
+
+        if not categories:
+            raise vkt.UserError("No categories found in the CSV file")
+
+        # Generate random colors for each category
+        new_categories = []
+        for category in categories:
+            # Generate a random color
+            r = random.randint(50, 255)
+            g = random.randint(50, 255)
+            b = random.randint(50, 255)
+
+            new_categories.append({"category": category, "color": vkt.Color(r, g, b)})
+
+        # Return SetParamsResult to update the required_categories field
+        return vkt.SetParamsResult({"step_2": {"required_categories": new_categories}})
 
     @vkt.AutodeskView("3D Model Viewer", duration_guess=5)
     def view_autodesk_model(self, params, **kwargs):
@@ -117,7 +207,7 @@ class Controller(vkt.Controller):
         Returns:
             AutodeskResult containing the model to display
         """
-        if not params.autodesk_file:
+        if not params.step_1.autodesk_file:
             raise vkt.UserError(
                 "Please select an Autodesk file from the input field above"
             )
@@ -127,194 +217,41 @@ class Controller(vkt.Controller):
         token = integration.get_access_token()
 
         # Return the Autodesk viewer result
-        return vkt.AutodeskResult(params.autodesk_file, access_token=token)
-
-    @vkt.TableView("Family Instances", duration_guess=10)
-    def view_family_instances(self, params, **kwargs):
-        """
-        Display a table of family instances from the model, including Structural Framing
-        and other important Revit families.
-
-        Args:
-            params: User input parameters
-            **kwargs: Additional arguments
-
-        Returns:
-            TableResult containing family instance data
-        """
-        if not params.autodesk_file:
-            raise vkt.UserError(
-                "Please select an Autodesk file from the input field above"
-            )
-
-        # Initialize the OAuth2 integration and get access token
-        integration = vkt.external.OAuth2Integration("autodesk-integration")
-        token = integration.get_access_token()
-
-        # Get region and AEC Data Model element group ID from the Autodesk file
-        region = params.autodesk_file.get_region(token)
-        group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
-
-        # Define categories to query (Structural Framing and other important families)
-        categories = [
-            "Structural Framing",
-            "Structural Columns",
-            "Walls",
-            "Floors",
-            "Doors",
-            "Windows",
-        ]
-
-        # Collect all family instances
-        all_instances = []
-
-        for category in categories:
-            vkt.progress_message(
-                f"Fetching {category} instances...",
-                percentage=categories.index(category) / len(categories) * 100,
-            )
-
-            # GraphQL query to get family instances for this category
-            query = """
-            query FamilyInstances($elementGroupId: ID!, $rsqlFilter: String!, $pagination: PaginationInput) {
-              elementsByElementGroup(
-                elementGroupId: $elementGroupId,
-                filter: { query: $rsqlFilter },
-                pagination: $pagination
-              ) {
-                pagination { cursor pageSize }
-                results {
-                  id
-                  name
-                  properties(filter: { names: ["Family Name", "Type Name"] }) {
-                    results {
-                      name
-                      value
-                    }
-                  }
-                }
-              }
-            }
-            """
-
-            # Construct RSQL filter for this category
-            rsql_filter = f"property.name.category=='{category}' and 'property.name.Element Context'==Instance"
-
-            # Fetch all instances with pagination
-            cursor = None
-            limit = 100
-
-            while True:
-                variables = {
-                    "elementGroupId": group_id,
-                    "rsqlFilter": rsql_filter,
-                    "pagination": {"limit": limit}
-                    if not cursor
-                    else {"cursor": cursor, "limit": limit},
-                }
-
-                data = execute_graphql(query, token, region, variables)
-                block = data.get("elementsByElementGroup", {}) or {}
-                page_results = block.get("results", []) or []
-
-                # Process each element in the page
-                for element in page_results:
-                    element_name = element.get("name", "Unknown")
-
-                    # Extract Family Name and Type Name from properties
-                    family_name = "Unknown"
-                    type_name = "Unknown"
-
-                    properties = element.get("properties", {}).get("results", []) or []
-                    for prop in properties:
-                        prop_name = prop.get("name", "")
-                        prop_value = prop.get("value", "")
-
-                        if prop_name == "Family Name":
-                            family_name = prop_value if prop_value else "Unknown"
-                        elif prop_name == "Type Name":
-                            type_name = prop_value if prop_value else "Unknown"
-
-                    # Add to results
-                    all_instances.append(
-                        {
-                            "category": category,
-                            "family_name": family_name,
-                            "type_name": type_name,
-                            "element_name": element_name,
-                        }
-                    )
-
-                # Check pagination
-                page = block.get("pagination", {}) or {}
-                new_cursor = page.get("cursor")
-
-                # Stop on empty cursor, repeated cursor, or empty page
-                if not new_cursor or new_cursor == cursor or len(page_results) == 0:
-                    break
-
-                cursor = new_cursor
-
-        # Prepare table data
-        if not all_instances:
-            # Return empty table if no instances found
-            return vkt.TableResult(
-                [["No family instances found in the selected categories"]],
-                column_headers=["Message"],
-            )
-
-        # Create table rows
-        table_data = []
-        for instance in all_instances:
-            table_data.append(
-                [
-                    instance["category"],
-                    instance["family_name"],
-                    instance["type_name"],
-                    instance["element_name"],
-                ]
-            )
-
-        # Define column headers
-        column_headers = [
-            vkt.TableHeader("Category", align="left"),
-            vkt.TableHeader("Family Name", align="left"),
-            vkt.TableHeader("Type Name", align="left"),
-            vkt.TableHeader("Element Name", align="left"),
-        ]
-
-        return vkt.TableResult(
-            table_data, column_headers=column_headers, enable_sorting_and_filtering=True
-        )
+        return vkt.AutodeskResult(params.step_1.autodesk_file, access_token=token)
 
     @vkt.TableView("Category Summary", duration_guess=10)
     def view_category_summary(self, params, **kwargs):
         """
         Display a summary table that shows the same categories as the dropdown list
-        and cross-checks whether they are present in the model.
+        and cross-checks whether they are present in the models (structural and/or electrical).
 
         Args:
             params: User input parameters
             **kwargs: Additional arguments
 
         Returns:
-            TableResult showing which categories from the dropdown are present in the model
+            TableResult showing which categories from the dropdown are present in the models
         """
-        if not params.autodesk_file:
+        if (
+            not params.step_1.autodesk_file
+            and not params.step_1.autodesk_file_electrical
+        ):
             raise vkt.UserError(
-                "Please select an Autodesk file from the input field above"
+                "Please select at least one Autodesk file (structural or electrical)"
             )
 
         # Initialize the OAuth2 integration and get access token
         integration = vkt.external.OAuth2Integration("autodesk-integration")
         token = integration.get_access_token()
 
-        # Get region and AEC Data Model element group ID from the Autodesk file
-        region = params.autodesk_file.get_region(token)
-        group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
+        # Collect category counts from both files
+        structural_counts = {}
+        electrical_counts = {}
 
         # Extract required categories from dynamic array
-        contract_scope = set(row["category"] for row in params.contract_scope)
+        required_categories = set(
+            row["category"] for row in params.step_2.required_categories
+        )
 
         # Define the master list of categories (same as dropdown options)
         all_categories = [
@@ -340,9 +277,7 @@ class Controller(vkt.Controller):
             "Pipes",
         ]
 
-        vkt.progress_message("Fetching category counts from model...", percentage=10)
-
-        # Query to get all distinct categories in the model with their counts
+        # Query to get all distinct categories in a model with their counts
         query = """
         query UsedCategories($elementGroupId: ID!, $limit: Int!) {
           distinctPropertyValuesInElementGroupByName(
@@ -360,49 +295,100 @@ class Controller(vkt.Controller):
         }
         """
 
-        variables = {
-            "elementGroupId": group_id,
-            "limit": 1000,  # High limit to get all categories
-        }
+        # Fetch from structural file if provided
+        if params.step_1.autodesk_file:
+            vkt.progress_message(
+                "Fetching categories from structural file...", percentage=20
+            )
+            try:
+                region = params.step_1.autodesk_file.get_region(token)
+                group_id = (
+                    params.step_1.autodesk_file.get_aec_data_model_element_group_id(
+                        token
+                    )
+                )
 
-        try:
-            data = execute_graphql(query, token, region, variables)
-            block = data.get("distinctPropertyValuesInElementGroupByName") or {}
-            results_list = block.get("results") or []
+                variables = {"elementGroupId": group_id, "limit": 1000}
+                data = execute_graphql(query, token, region, variables)
+                block = data.get("distinctPropertyValuesInElementGroupByName") or {}
+                results_list = block.get("results") or []
 
-            # Create a dictionary of category counts from the model
-            model_category_counts = {}
-            for r in results_list:
-                values = r.get("values") or []
-                for v in values:
-                    category_name = v.get("value", "")
-                    element_count = v.get("count", 0)
-                    if category_name:
-                        model_category_counts[category_name] = element_count
+                for r in results_list:
+                    values = r.get("values") or []
+                    for v in values:
+                        category_name = v.get("value", "")
+                        element_count = v.get("count", 0)
+                        if category_name:
+                            structural_counts[category_name] = element_count
 
-        except Exception as e:
-            raise vkt.UserError(f"Failed to fetch categories from model: {str(e)}")
+            except Exception as e:
+                vkt.UserMessage.warning(
+                    f"Failed to fetch categories from structural file: {str(e)}"
+                )
+
+        # Fetch from electrical file if provided
+        if params.step_1.autodesk_file_electrical:
+            vkt.progress_message(
+                "Fetching categories from electrical file...", percentage=50
+            )
+            try:
+                region = params.step_1.autodesk_file_electrical.get_region(token)
+                group_id = params.step_1.autodesk_file_electrical.get_aec_data_model_element_group_id(
+                    token
+                )
+
+                variables = {"elementGroupId": group_id, "limit": 1000}
+                data = execute_graphql(query, token, region, variables)
+                block = data.get("distinctPropertyValuesInElementGroupByName") or {}
+                results_list = block.get("results") or []
+
+                for r in results_list:
+                    values = r.get("values") or []
+                    for v in values:
+                        category_name = v.get("value", "")
+                        element_count = v.get("count", 0)
+                        if category_name:
+                            electrical_counts[category_name] = element_count
+
+            except Exception as e:
+                vkt.UserMessage.warning(
+                    f"Failed to fetch categories from electrical file: {str(e)}"
+                )
 
         vkt.progress_message("Preparing category summary...", percentage=80)
 
         # Prepare table data with visual indicators
         table_data = []
         for category_name in all_categories:
-            # Check if category is in the model
-            element_count = model_category_counts.get(category_name, 0)
-            in_model = element_count > 0
+            # Get element counts from both files
+            structural_count = structural_counts.get(category_name, 0)
+            electrical_count = electrical_counts.get(category_name, 0)
+            total_count = structural_count + electrical_count
+
+            # Check if category is in any model
+            in_model = total_count > 0
 
             # Check if category is in required categories
-            in_contract = category_name in contract_scope
+            in_contract = category_name in required_categories
+
+            # Build element count display with breakdown
+            if params.step_1.autodesk_file and params.step_1.autodesk_file_electrical:
+                count_display = (
+                    f"{total_count} (S:{structural_count}, E:{electrical_count})"
+                )
+            elif params.step_1.autodesk_file:
+                count_display = f"{structural_count}"
+            else:
+                count_display = f"{electrical_count}"
 
             # Determine status symbol and description
             if in_contract and in_model:
                 status_symbol = "✓"
-                status_text = "Present in contract and model"
+                status_text = "Present in contract and model(s)"
                 status_color = vkt.Color(0, 128, 0)  # Green
             elif in_contract and not in_model:
                 status_symbol = "✗"
-                status_text = "In contract but not in model"
+                status_text = "In contract but not in model(s)"
                 status_color = vkt.Color(255, 165, 0)  # Orange
             elif not in_contract and in_model:
                 status_symbol = "✗"
@@ -410,7 +396,7 @@ class Controller(vkt.Controller):
                 status_color = vkt.Color(255, 0, 0)  # Red
             else:  # not in_contract and not in_model
                 status_symbol = "✗"
-                status_text = "Not in contract, not in model"
+                status_text = "Not in contract, not in model(s)"
                 status_color = vkt.Color(128, 128, 128)  # Gray
 
             # Create colored cells for better visualization
@@ -418,7 +404,7 @@ class Controller(vkt.Controller):
                 status_symbol, text_color=status_color, text_style="bold"
             )
 
-            table_data.append([category_name, status_cell, element_count, status_text])
+            table_data.append([category_name, status_cell, count_display, status_text])
 
         # Define column headers
         column_headers = [
@@ -438,7 +424,7 @@ class Controller(vkt.Controller):
         Display the Autodesk model with categories highlighted in custom colors
         based on the dynamic field selections.
         """
-        if not params.autodesk_file:
+        if not params.step_1.autodesk_file:
             raise vkt.UserError(
                 "Please select an Autodesk file from the input field above"
             )
@@ -448,7 +434,7 @@ class Controller(vkt.Controller):
         token = integration.get_access_token()
 
         # Get the URN from the Autodesk file and encode it properly
-        autodesk_file = params.autodesk_file
+        autodesk_file = params.step_1.autodesk_file
         region = autodesk_file.get_region(token)
         group_id = autodesk_file.get_aec_data_model_element_group_id(token)
 
@@ -466,7 +452,7 @@ class Controller(vkt.Controller):
         # Build a list of external IDs with their colors for each category
         external_ids_with_colors = []
 
-        for row in params.contract_scope:
+        for row in params.step_2.required_categories:
             category_name = row["category"]
             color = row["color"]
 
@@ -726,7 +712,7 @@ class Controller(vkt.Controller):
         Returns:
             DataResult with category status information
         """
-        if not params.autodesk_file:
+        if not params.step_1.autodesk_file:
             raise vkt.UserError(
                 "Please select an Autodesk file from the input field above"
             )
@@ -736,11 +722,15 @@ class Controller(vkt.Controller):
         token = integration.get_access_token()
 
         # Get region and AEC Data Model element group ID from the Autodesk file
-        region = params.autodesk_file.get_region(token)
-        group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
+        region = params.step_1.autodesk_file.get_region(token)
+        group_id = params.step_1.autodesk_file.get_aec_data_model_element_group_id(
+            token
+        )
 
         # Extract required categories from dynamic array
-        contract_scope = set(row["category"] for row in params.contract_scope)
+        required_categories = set(
+            row["category"] for row in params.step_2.required_categories
+        )
 
         # Define the master list of categories (same as dropdown options)
         all_categories = [
@@ -819,9 +809,9 @@ class Controller(vkt.Controller):
         categories_in_model = sum(
             1 for cat in all_categories if model_category_counts.get(cat, 0) > 0
         )
-        categories_in_contract = len(contract_scope)
+        categories_in_contract = len(required_categories)
         categories_matched = sum(
-            1 for cat in contract_scope if model_category_counts.get(cat, 0) > 0
+            1 for cat in required_categories if model_category_counts.get(cat, 0) > 0
         )
 
         summary_group = vkt.DataGroup(
@@ -850,7 +840,7 @@ class Controller(vkt.Controller):
             in_model = element_count > 0
 
             # Check if category is in required categories
-            in_contract = category_name in contract_scope
+            in_contract = category_name in required_categories
 
             # Categorize and add to appropriate group
             if in_contract and in_model:
@@ -923,9 +913,9 @@ class Controller(vkt.Controller):
 
         return vkt.DataResult(main_group)
 
-    def download_category_report(self, params, **kwargs):
+    def download_contract_compliance_report(self, params, **kwargs):
         """
-        Generate and download a Word document containing the Category Summary table.
+        Generate and download a Word document showing how the model complies with the contract scope.
 
         Args:
             params: User input parameters
@@ -941,21 +931,26 @@ class Controller(vkt.Controller):
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.shared import RGBColor
 
-        if not params.autodesk_file:
+        if (
+            not params.step_1.autodesk_file
+            and not params.step_1.autodesk_file_electrical
+        ):
             raise vkt.UserError(
-                "Please select an Autodesk file from the input field above"
+                "Please select at least one Autodesk file (structural or electrical)"
             )
 
         # Initialize the OAuth2 integration and get access token
         integration = vkt.external.OAuth2Integration("autodesk-integration")
         token = integration.get_access_token()
 
-        # Get region and AEC Data Model element group ID from the Autodesk file
-        region = params.autodesk_file.get_region(token)
-        group_id = params.autodesk_file.get_aec_data_model_element_group_id(token)
+        # Collect category counts from both files
+        structural_counts = {}
+        electrical_counts = {}
 
         # Extract required categories from dynamic array
-        contract_scope = set(row["category"] for row in params.contract_scope)
+        required_categories = set(
+            row["category"] for row in params.step_2.required_categories
+        )
 
         # Define the master list of categories (same as dropdown options)
         all_categories = [
@@ -981,9 +976,7 @@ class Controller(vkt.Controller):
             "Pipes",
         ]
 
-        vkt.progress_message("Fetching category data from model...", percentage=20)
-
-        # Query to get all distinct categories in the model with their counts
+        # Query to get all distinct categories in a model with their counts
         query = """
         query UsedCategories($elementGroupId: ID!, $limit: Int!) {
           distinctPropertyValuesInElementGroupByName(
@@ -1001,28 +994,65 @@ class Controller(vkt.Controller):
         }
         """
 
-        variables = {
-            "elementGroupId": group_id,
-            "limit": 1000,  # High limit to get all categories
-        }
+        # Fetch from structural file if provided
+        if params.step_1.autodesk_file:
+            vkt.progress_message(
+                "Fetching categories from structural file...", percentage=10
+            )
+            try:
+                region = params.step_1.autodesk_file.get_region(token)
+                group_id = (
+                    params.step_1.autodesk_file.get_aec_data_model_element_group_id(
+                        token
+                    )
+                )
 
-        try:
-            data = execute_graphql(query, token, region, variables)
-            block = data.get("distinctPropertyValuesInElementGroupByName") or {}
-            results_list = block.get("results") or []
+                variables = {"elementGroupId": group_id, "limit": 1000}
+                data = execute_graphql(query, token, region, variables)
+                block = data.get("distinctPropertyValuesInElementGroupByName") or {}
+                results_list = block.get("results") or []
 
-            # Create a dictionary of category counts from the model
-            model_category_counts = {}
-            for r in results_list:
-                values = r.get("values") or []
-                for v in values:
-                    category_name = v.get("value", "")
-                    element_count = v.get("count", 0)
-                    if category_name:
-                        model_category_counts[category_name] = element_count
+                for r in results_list:
+                    values = r.get("values") or []
+                    for v in values:
+                        category_name = v.get("value", "")
+                        element_count = v.get("count", 0)
+                        if category_name:
+                            structural_counts[category_name] = element_count
 
-        except Exception as e:
-            raise vkt.UserError(f"Failed to fetch categories from model: {str(e)}")
+            except Exception as e:
+                vkt.UserMessage.warning(
+                    f"Failed to fetch categories from structural file: {str(e)}"
+                )
+
+        # Fetch from electrical file if provided
+        if params.step_1.autodesk_file_electrical:
+            vkt.progress_message(
+                "Fetching categories from electrical file...", percentage=30
+            )
+            try:
+                region = params.step_1.autodesk_file_electrical.get_region(token)
+                group_id = params.step_1.autodesk_file_electrical.get_aec_data_model_element_group_id(
+                    token
+                )
+
+                variables = {"elementGroupId": group_id, "limit": 1000}
+                data = execute_graphql(query, token, region, variables)
+                block = data.get("distinctPropertyValuesInElementGroupByName") or {}
+                results_list = block.get("results") or []
+
+                for r in results_list:
+                    values = r.get("values") or []
+                    for v in values:
+                        category_name = v.get("value", "")
+                        element_count = v.get("count", 0)
+                        if category_name:
+                            electrical_counts[category_name] = element_count
+
+            except Exception as e:
+                vkt.UserMessage.warning(
+                    f"Failed to fetch categories from electrical file: {str(e)}"
+                )
 
         vkt.progress_message("Generating Word document...", percentage=60)
 
@@ -1030,23 +1060,38 @@ class Controller(vkt.Controller):
         doc = Document()
 
         # Add title
-        title = doc.add_heading("Category Summary Report", level=1)
+        title = doc.add_heading("Contract Compliance Report", level=1)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         # Add metadata
         doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        doc.add_paragraph(
-            f"File: {params.autodesk_file.url.split('/')[-1] if params.autodesk_file else 'Unknown'}"
-        )
+
+        # Add file information
+        if params.step_1.autodesk_file and params.step_1.autodesk_file_electrical:
+            doc.add_paragraph(
+                f"Structural File: {params.step_1.autodesk_file.url.split('/')[-1]}"
+            )
+            doc.add_paragraph(
+                f"Electrical File: {params.step_1.autodesk_file_electrical.url.split('/')[-1]}"
+            )
+        elif params.step_1.autodesk_file:
+            doc.add_paragraph(
+                f"Structural File: {params.step_1.autodesk_file.url.split('/')[-1]}"
+            )
+        else:
+            doc.add_paragraph(
+                f"Electrical File: {params.step_1.autodesk_file_electrical.url.split('/')[-1]}"
+            )
+
         doc.add_paragraph("")
 
         # Add legend
         doc.add_heading("Legend", level=2)
         legend_items = [
-            ("✓ Green", "Category is in contract and present in model"),
-            ("✗ Orange", "Category is in contract but not in model"),
-            ("✗ Red", "Category is in model but missing from contract"),
-            ("✗ Gray", "Category is neither in contract nor in model"),
+            ("✓ Green", "Category is in contract and present in model(s)"),
+            ("✗ Orange", "Category is in contract but not in model(s)"),
+            ("✗ Red", "Category is in model(s) but missing from contract"),
+            ("✗ Gray", "Category is neither in contract nor in model(s)"),
         ]
         for symbol, description in legend_items:
             doc.add_paragraph(f"{symbol}: {description}", style="List Bullet")
@@ -1056,15 +1101,16 @@ class Controller(vkt.Controller):
         # Add table
         doc.add_heading("Category Details", level=2)
 
-        # Create table with 3 columns
-        table = doc.add_table(rows=1, cols=3)
+        # Create table with 4 columns (added Element Count column)
+        table = doc.add_table(rows=1, cols=4)
         table.style = "Light Grid Accent 1"
 
         # Add header row
         header_cells = table.rows[0].cells
         header_cells[0].text = "Category"
         header_cells[1].text = "Status"
-        header_cells[2].text = "Description"
+        header_cells[2].text = "Element Count"
+        header_cells[3].text = "Description"
 
         # Make header bold
         for cell in header_cells:
@@ -1074,21 +1120,35 @@ class Controller(vkt.Controller):
 
         # Add data rows
         for category_name in all_categories:
-            # Check if category is in the model
-            element_count = model_category_counts.get(category_name, 0)
-            in_model = element_count > 0
+            # Get element counts from both files
+            structural_count = structural_counts.get(category_name, 0)
+            electrical_count = electrical_counts.get(category_name, 0)
+            total_count = structural_count + electrical_count
+
+            # Check if category is in any model
+            in_model = total_count > 0
 
             # Check if category is in required categories
-            in_contract = category_name in contract_scope
+            in_contract = category_name in required_categories
+
+            # Build element count display with breakdown
+            if params.step_1.autodesk_file and params.step_1.autodesk_file_electrical:
+                count_display = (
+                    f"{total_count} (S:{structural_count}, E:{electrical_count})"
+                )
+            elif params.step_1.autodesk_file:
+                count_display = f"{structural_count}"
+            else:
+                count_display = f"{electrical_count}"
 
             # Determine status symbol, description, and color
             if in_contract and in_model:
                 status_symbol = "✓"
-                status_text = f"Present ({element_count} elements)"
+                status_text = "Present in contract and model(s)"
                 color = RGBColor(0, 128, 0)  # Green
             elif in_contract and not in_model:
                 status_symbol = "✗"
-                status_text = "In contract but not in model"
+                status_text = "In contract but not in model(s)"
                 color = RGBColor(255, 165, 0)  # Orange
             elif not in_contract and in_model:
                 status_symbol = "✗"
@@ -1096,20 +1156,25 @@ class Controller(vkt.Controller):
                 color = RGBColor(255, 0, 0)  # Red
             else:  # not in_contract and not in_model
                 status_symbol = "✗"
-                status_text = "Not in contract, not in model"
+                status_text = "Not in contract, not in model(s)"
                 color = RGBColor(128, 128, 128)  # Gray
 
             # Add row to table
             row_cells = table.add_row().cells
             row_cells[0].text = category_name
             row_cells[1].text = status_symbol
-            row_cells[2].text = status_text
+            row_cells[2].text = count_display
+            row_cells[3].text = status_text
 
             # Apply color to status symbol
             for paragraph in row_cells[1].paragraphs:
                 for run in paragraph.runs:
                     run.font.color.rgb = color
                     run.font.bold = True
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            # Center align the element count
+            for paragraph in row_cells[2].paragraphs:
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         vkt.progress_message("Finalizing document...", percentage=90)
@@ -1120,7 +1185,7 @@ class Controller(vkt.Controller):
         doc_io.seek(0)
 
         # Create filename with timestamp
-        filename = f"Category_Summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        filename = f"Contract_Compliance_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
 
         # Return as DownloadResult
         return vkt.DownloadResult(vkt.File.from_data(doc_io.getvalue()), filename)
